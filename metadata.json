@@ -1,0 +1,6 @@
+{
+  "name": "Inversiones Food Salas F.P.",
+  "description": "Aplicación de facturación, inventario y cobranza para la distribución avícola Food Salas F.P. con tasas BCV, calculadora inversa y cartera de clientes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
