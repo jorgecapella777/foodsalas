@@ -9,9 +9,13 @@ import {
   CheckCircle2, 
   AlertCircle,
   HelpCircle,
-  Info
+  Info,
+  Pencil,
+  Trash2,
+  X
 } from 'lucide-react';
-import { Client, Provider, Product, ClientPayment, ProviderPayment, ProviderStock } from '../types';
+import { Client, Provider, Product, ClientPayment, ProviderPayment, ProviderStock, HistoricalOperation } from '../types';
+import PinConfirmModal from './PinConfirmModal';
 
 interface PagosViewProps {
   clients: Client[];
@@ -21,6 +25,7 @@ interface PagosViewProps {
   clientPayments: ClientPayment[];
   providerPayments: ProviderPayment[];
   tasaBcvUsd: number;
+  historicalOperations?: HistoricalOperation[];
   onRegisterClientSale: (
     clientId: string,
     productId: string,
@@ -42,6 +47,10 @@ interface PagosViewProps {
     date: string,
     productName: string
   ) => void;
+  onEditClientPayment?: (id: string, updatedFields: Partial<ClientPayment>) => void;
+  onDeleteClientPayment?: (id: string) => void;
+  onEditProviderPayment?: (id: string, updatedFields: Partial<ProviderPayment>) => void;
+  onDeleteProviderPayment?: (id: string) => void;
 }
 
 export default function PagosView({
@@ -52,11 +61,158 @@ export default function PagosView({
   clientPayments,
   providerPayments,
   tasaBcvUsd,
+  historicalOperations,
   onRegisterClientSale,
   onRegisterProviderPayment,
+  onEditClientPayment,
+  onDeleteClientPayment,
+  onEditProviderPayment,
+  onDeleteProviderPayment
 }: PagosViewProps) {
   
   const [activeForm, setActiveForm] = useState<'CLIENTE' | 'PROVEEDOR'>('CLIENTE');
+
+  // Calcular deudas en kilos
+  const getClientOwedKg = (client: Client) => {
+    if (client.balanceUsd <= 0) return 0;
+    const clientSales = (historicalOperations || []).filter(op => {
+      const nameMatch = op.destination?.toLowerCase() === client.name.toLowerCase() || 
+                        op.origin?.toLowerCase() === client.name.toLowerCase() || 
+                        op.description.toLowerCase().includes(client.name.toLowerCase());
+      const isSale = op.description.toLowerCase().includes('venta') && op.kg !== undefined && op.kg > 0;
+      return nameMatch && isSale;
+    });
+
+    if (clientSales.length === 0) {
+      const avgProductPrice = products && products.length > 0
+        ? products.reduce((sum, p) => sum + p.priceUsd, 0) / products.length
+        : 6.0; // Precio de referencia por kg
+      return client.balanceUsd / avgProductPrice;
+    }
+
+    const totalSalesUsd = clientSales.reduce((sum, op) => sum + (op.amountUsd || 0), 0);
+    const totalSalesKg = clientSales.reduce((sum, op) => sum + (op.kg || 0), 0);
+
+    if (totalSalesUsd > 0 && totalSalesKg > 0) {
+      return client.balanceUsd / (totalSalesUsd / totalSalesKg);
+    }
+    return 0;
+  };
+
+  // Edit Client Payment States
+  const [editingClientPayment, setEditingClientPayment] = useState<ClientPayment | null>(null);
+  const [editCPMethod, setEditCPMethod] = useState<'Efectivo' | 'Divisas' | 'Transferencia' | 'Pago Móvil' | 'Otro'>('Efectivo');
+  const [editCPReference, setEditCPReference] = useState('');
+  const [editCPAmount, setEditCPAmount] = useState('');
+
+  // Edit Provider Payment States
+  const [editingProviderPayment, setEditingProviderPayment] = useState<ProviderPayment | null>(null);
+  const [editPPMethod, setEditPPMethod] = useState('');
+  const [editPPReference, setEditPPReference] = useState('');
+  const [editPPAmount, setEditPPAmount] = useState('');
+
+  // Security pin states
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalTitle, setPinModalTitle] = useState('');
+  const [pinModalMessage, setPinModalMessage] = useState('');
+  const [pendingAction, setPendingAction] = useState<{
+    type: 'edit_cp' | 'delete_cp' | 'edit_pp' | 'delete_pp';
+    targetId: string;
+    payload?: any;
+  } | null>(null);
+
+  const handleStartEditCP = (cp: ClientPayment) => {
+    setEditingClientPayment(cp);
+    setEditCPMethod(cp.paymentMethod as any);
+    setEditCPReference(cp.reference || '');
+    setEditCPAmount(cp.amountUsd.toString());
+  };
+
+  const handleSaveEditCP = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingClientPayment || !onEditClientPayment) return;
+    setPendingAction({
+      type: 'edit_cp',
+      targetId: editingClientPayment.id,
+      payload: {
+        paymentMethod: editCPMethod,
+        reference: editCPReference.trim() || undefined,
+        amountUsd: parseFloat(editCPAmount) || 0
+      }
+    });
+    setPinModalTitle('Confirmar Modificación');
+    setPinModalMessage(`¿Está seguro de que desea modificar este cobro de cliente? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartDeleteCP = (cp: ClientPayment) => {
+    if (!onDeleteClientPayment) return;
+    setPendingAction({
+      type: 'delete_cp',
+      targetId: cp.id
+    });
+    setPinModalTitle('Confirmar Eliminación');
+    setPinModalMessage(`¿Está seguro de que desea eliminar este cobro de la base de datos por completo? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartEditPP = (pp: ProviderPayment) => {
+    setEditingProviderPayment(pp);
+    setEditPPMethod(pp.paymentMethod || 'Efectivo');
+    setEditPPReference(pp.reference || '');
+    setEditPPAmount(pp.amountUsd.toString());
+  };
+
+  const handleSaveEditPP = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProviderPayment || !onEditProviderPayment) return;
+    setPendingAction({
+      type: 'edit_pp',
+      targetId: editingProviderPayment.id,
+      payload: {
+        paymentMethod: editPPMethod,
+        reference: editPPReference.trim() || undefined,
+        amountUsd: parseFloat(editPPAmount) || 0
+      }
+    });
+    setPinModalTitle('Confirmar Modificación');
+    setPinModalMessage(`¿Está seguro de que desea modificar este pago a proveedor? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartDeletePP = (pp: ProviderPayment) => {
+    if (!onDeleteProviderPayment) return;
+    setPendingAction({
+      type: 'delete_pp',
+      targetId: pp.id
+    });
+    setPinModalTitle('Confirmar Eliminación');
+    setPinModalMessage(`¿Está seguro de que desea eliminar este pago de la base de datos por completo? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleExecutePendingAction = () => {
+    if (!pendingAction) return;
+
+    if (pendingAction.type === 'edit_cp' && onEditClientPayment) {
+      onEditClientPayment(pendingAction.targetId, pendingAction.payload);
+      setEditingClientPayment(null);
+      alert('Cobro de cliente modificado con éxito.');
+    } else if (pendingAction.type === 'delete_cp' && onDeleteClientPayment) {
+      onDeleteClientPayment(pendingAction.targetId);
+      alert('Cobro de cliente eliminado con éxito.');
+    } else if (pendingAction.type === 'edit_pp' && onEditProviderPayment) {
+      onEditProviderPayment(pendingAction.targetId, pendingAction.payload);
+      setEditingProviderPayment(null);
+      alert('Pago a proveedor modificado con éxito.');
+    } else if (pendingAction.type === 'delete_pp' && onDeleteProviderPayment) {
+      onDeleteProviderPayment(pendingAction.targetId);
+      alert('Pago a proveedor eliminado con éxito.');
+    }
+
+    setPinModalOpen(false);
+    setPendingAction(null);
+  };
 
   // CLIENT FORM STATES
   const [clientId, setClientId] = useState('');
@@ -245,7 +401,7 @@ export default function PagosView({
               <option value="">Seleccione el comprador de la lista...</option>
               {clients.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.name} {c.cedula ? `[C.I. ${c.cedula}]` : ''} {c.balanceUsd > 0 ? `(Debe: $${c.balanceUsd.toLocaleString('es-VE')})` : c.balanceUsd < 0 ? `(A favor: $${Math.abs(c.balanceUsd).toLocaleString('es-VE')})` : '(Solvente)'}
+                  {c.name} {c.cedula ? `[C.I. ${c.cedula}]` : ''} {c.balanceUsd > 0 ? `(Debe: $${c.balanceUsd.toLocaleString('es-VE')} - ${getClientOwedKg(c).toFixed(1)} Kg aprox.)` : c.balanceUsd < 0 ? `(A favor: $${Math.abs(c.balanceUsd).toLocaleString('es-VE')})` : '(Solvente)'}
                 </option>
               ))}
             </select>
@@ -647,12 +803,34 @@ export default function PagosView({
           {/* Clientes */}
           {clientPayments.map((cp) => (
             <div key={cp.id} className="bg-white border border-slate-150 p-4 rounded-2xl flex justify-between items-center gap-3 shadow-2xs hover:bg-slate-50/20 transition-colors">
-              <div className="flex gap-2.5 items-start">
+              <div className="flex gap-2.5 items-start flex-1">
                 <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl mt-0.5 border border-emerald-100 shrink-0">
                   <ArrowDownLeft className="w-4 h-4" />
                 </div>
                 <div className="space-y-0.5">
-                  <h5 className="font-extrabold text-xs text-slate-800 leading-tight">Cobro: {cp.clientName}</h5>
+                  <h5 className="font-extrabold text-xs text-slate-800 leading-tight flex items-center gap-1.5">
+                    Cobro: {cp.clientName}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {onEditClientPayment && (
+                        <button
+                          onClick={() => handleStartEditCP(cp)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-650 transition-colors cursor-pointer"
+                          title="Modificar Cobro"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      )}
+                      {onDeleteClientPayment && (
+                        <button
+                          onClick={() => handleStartDeleteCP(cp)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-rose-650 transition-colors cursor-pointer"
+                          title="Eliminar Cobro"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </h5>
                   <div className="text-[9.5px] text-slate-450 font-bold flex flex-wrap items-center gap-1 uppercase">
                     <span className="text-emerald-700 font-black">{cp.type}</span>
                     <span>•</span>
@@ -677,12 +855,34 @@ export default function PagosView({
           {/* Proveedores */}
           {providerPayments.map((pp) => (
             <div key={pp.id} className="bg-white border border-slate-150 p-4 rounded-2xl flex justify-between items-center gap-3 shadow-2xs hover:bg-slate-50/20 transition-colors">
-              <div className="flex gap-2.5 items-start">
+              <div className="flex gap-2.5 items-start flex-1">
                 <div className="p-2 bg-rose-50 text-rose-600 rounded-xl mt-0.5 border border-rose-100 shrink-0">
                   <ArrowUpRight className="w-4 h-4" />
                 </div>
                 <div className="space-y-0.5">
-                  <h5 className="font-extrabold text-xs text-slate-800 leading-tight">Pago: {pp.providerName}</h5>
+                  <h5 className="font-extrabold text-xs text-slate-800 leading-tight flex items-center gap-1.5">
+                    Pago: {pp.providerName}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {onEditProviderPayment && (
+                        <button
+                          onClick={() => handleStartEditPP(pp)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-650 transition-colors cursor-pointer"
+                          title="Modificar Pago"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      )}
+                      {onDeleteProviderPayment && (
+                        <button
+                          onClick={() => handleStartDeletePP(pp)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-rose-650 transition-colors cursor-pointer"
+                          title="Eliminar Pago"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </h5>
                   <div className="text-[9.5px] text-slate-450 font-bold flex flex-wrap items-center gap-1 uppercase">
                     <span>{pp.paymentMethod || 'Abono'}</span>
                     {pp.reference && (
@@ -709,6 +909,169 @@ export default function PagosView({
           )}
         </div>
       </div>
+
+      {/* MODAL EDITAR COBRO CLIENTE */}
+      {editingClientPayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <form onSubmit={handleSaveEditCP} className="bg-white w-full max-w-sm rounded-2xl overflow-hidden p-6 shadow-2xl relative text-slate-800 flex flex-col max-h-[90vh]">
+            <button 
+              type="button"
+              onClick={() => setEditingClientPayment(null)} 
+              className="text-slate-400 hover:text-slate-600 absolute right-4 top-4 bg-slate-50 hover:bg-slate-100 p-1 rounded-full cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pb-3 border-b border-slate-100 mb-4 shrink-0">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-indigo-600" />
+                Modificar Cobro de Cliente
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto no-scrollbar py-1">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Monto ($ USD)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editCPAmount}
+                  onChange={(e) => setEditCPAmount(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Método de Pago</label>
+                <select 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold"
+                  value={editCPMethod}
+                  onChange={(e) => setEditCPMethod(e.target.value as any)}
+                >
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Divisas">Divisas</option>
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Pago Móvil">Pago Móvil</option>
+                  <option value="Otro">Otro</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Referencia</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editCPReference}
+                  onChange={(e) => setEditCPReference(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setEditingClientPayment(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL EDITAR PAGO PROVEEDOR */}
+      {editingProviderPayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <form onSubmit={handleSaveEditPP} className="bg-white w-full max-w-sm rounded-2xl overflow-hidden p-6 shadow-2xl relative text-slate-800 flex flex-col max-h-[90vh]">
+            <button 
+              type="button"
+              onClick={() => setEditingProviderPayment(null)} 
+              className="text-slate-400 hover:text-slate-600 absolute right-4 top-4 bg-slate-50 hover:bg-slate-100 p-1 rounded-full cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pb-3 border-b border-slate-100 mb-4 shrink-0">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-indigo-600" />
+                Modificar Pago a Proveedor
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto no-scrollbar py-1">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Monto ($ USD)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPPAmount}
+                  onChange={(e) => setEditPPAmount(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Canal / Método de Pago</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPPMethod}
+                  onChange={(e) => setEditPPMethod(e.target.value)}
+                  placeholder="Ej. Transferencia Banesco, Divisas"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Referencia</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPPReference}
+                  onChange={(e) => setEditPPReference(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setEditingProviderPayment(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* PORTAL DE PIN DE SEGURIDAD */}
+      <PinConfirmModal
+        isOpen={pinModalOpen}
+        title={pinModalTitle}
+        message={pinModalMessage}
+        onConfirm={handleExecutePendingAction}
+        onCancel={() => {
+          setPinModalOpen(false);
+          setPendingAction(null);
+        }}
+      />
 
     </div>
   );

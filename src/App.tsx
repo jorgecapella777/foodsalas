@@ -564,7 +564,8 @@ export default function App() {
     applyPaymentNow: boolean,
     paymentMethod?: string,
     reference?: string,
-    customDate?: string
+    customDate?: string,
+    invoiceNum?: string
   ) => {
     const pricePerKg = kg > 0 ? parseFloat((totalCostUsd / kg).toFixed(2)) : 0;
     let providerName = 'Proveedor';
@@ -681,7 +682,7 @@ export default function App() {
         productName,
         amountUsd: totalCostUsd,
         dateTime: finalDateFormatted,
-        notes: `Compra de ${productName} de contado`,
+        notes: `Compra de ${productName} de contado` + (invoiceNum ? ` [Factura N° ${invoiceNum}]` : ''),
         paymentMethod,
         reference
       };
@@ -690,11 +691,12 @@ export default function App() {
     }
 
     // Registrar en los históricos de operaciones auditable
+    const invText = invoiceNum ? ` [Factura N° ${invoiceNum}]` : '';
     const newOp: HistoricalOperation = {
       id: Date.now().toString(),
       dateTime: finalDateFormatted,
       type: 'PURCHASE',
-      description: `Compra despachada: ${kg} Kg de ${productName} de ${providerName}. Tipo: ${applyPaymentNow ? 'Contado' : 'A Crédito'}` + (reference ? ` (Ref. ${reference})` : ''),
+      description: `Compra despachada: ${kg} Kg de ${productName} de ${providerName}. Tipo: ${applyPaymentNow ? 'Contado' : 'A Crédito'}${invText}` + (reference ? ` (Ref. ${reference})` : ''),
       origin: providerName,
       destination: `Inventario (Cámara)`,
       amountUsd: totalCostUsd,
@@ -761,6 +763,106 @@ export default function App() {
     };
     setHistoricalOperations(prev => [newOp, ...prev]);
     queueSyncAction('historical_operations', 'upsert', newOp);
+  };
+
+  // CLIENTS CRUD MODIFICATIONS
+  const handleEditClient = (id: string, updatedFields: Partial<Client>) => {
+    setClients(prev => prev.map(c => {
+      if (c.id === id) {
+        const updated = { ...c, ...updatedFields };
+        queueSyncAction('clients', 'upsert', updated);
+        return updated;
+      }
+      return c;
+    }));
+  };
+
+  const handleDeleteClient = (id: string) => {
+    const itemToDelete = clients.find(c => c.id === id);
+    if (itemToDelete) {
+      setClients(prev => prev.filter(c => c.id !== id));
+      queueSyncAction('clients', 'delete', itemToDelete);
+    }
+  };
+
+  // PROVIDERS CRUD MODIFICATIONS
+  const handleEditProvider = (id: string, updatedFields: Partial<Provider>) => {
+    setProviders(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, ...updatedFields };
+        queueSyncAction('providers', 'upsert', updated);
+        return updated;
+      }
+      return p;
+    }));
+  };
+
+  const handleDeleteProvider = (id: string) => {
+    const itemToDelete = providers.find(p => p.id === id);
+    if (itemToDelete) {
+      setProviders(prev => prev.filter(p => p.id !== id));
+      queueSyncAction('providers', 'delete', itemToDelete);
+    }
+  };
+
+  // CLIENT PAYMENTS CRUD MODIFICATIONS
+  const handleEditClientPayment = (id: string, updatedFields: Partial<ClientPayment>) => {
+    setClientPayments(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, ...updatedFields };
+        queueSyncAction('client_payments', 'upsert', updated);
+        return updated;
+      }
+      return p;
+    }));
+  };
+
+  const handleDeleteClientPayment = (id: string) => {
+    const itemToDelete = clientPayments.find(p => p.id === id);
+    if (itemToDelete) {
+      setClientPayments(prev => prev.filter(p => p.id !== id));
+      queueSyncAction('client_payments', 'delete', itemToDelete);
+    }
+  };
+
+  // PROVIDER PAYMENTS CRUD MODIFICATIONS
+  const handleEditProviderPayment = (id: string, updatedFields: Partial<ProviderPayment>) => {
+    setProviderPayments(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, ...updatedFields };
+        queueSyncAction('provider_payments', 'upsert', updated);
+        return updated;
+      }
+      return p;
+    }));
+  };
+
+  const handleDeleteProviderPayment = (id: string) => {
+    const itemToDelete = providerPayments.find(p => p.id === id);
+    if (itemToDelete) {
+      setProviderPayments(prev => prev.filter(p => p.id !== id));
+      queueSyncAction('provider_payments', 'delete', itemToDelete);
+    }
+  };
+
+  // HISTORICAL OPERATIONS CRUD MODIFICATIONS
+  const handleEditHistoricalOperation = (id: string, updatedFields: Partial<HistoricalOperation>) => {
+    setHistoricalOperations(prev => prev.map(op => {
+      if (op.id === id) {
+        const updated = { ...op, ...updatedFields };
+        queueSyncAction('historical_operations', 'upsert', updated);
+        return updated;
+      }
+      return op;
+    }));
+  };
+
+  const handleDeleteHistoricalOperation = (id: string) => {
+    const itemToDelete = historicalOperations.find(op => op.id === id);
+    if (itemToDelete) {
+      setHistoricalOperations(prev => prev.filter(op => op.id !== id));
+      queueSyncAction('historical_operations', 'delete', itemToDelete);
+    }
   };
 
   // 6. Registrar Venta / Cobro de Cliente (Contado o Crédito con cuotas)
@@ -1355,8 +1457,13 @@ export default function App() {
               clientPayments={clientPayments}
               providerPayments={providerPayments}
               tasaBcvUsd={tasaBcvUsd}
+              historicalOperations={historicalOperations}
               onRegisterClientSale={handleRegisterClientSale}
               onRegisterProviderPayment={handleRegisterProviderPayment}
+              onEditClientPayment={handleEditClientPayment}
+              onDeleteClientPayment={handleDeleteClientPayment}
+              onEditProviderPayment={handleEditProviderPayment}
+              onDeleteProviderPayment={handleDeleteProviderPayment}
             />
           )}
 
@@ -1372,6 +1479,8 @@ export default function App() {
             <HistoricosView 
               operations={historicalOperations}
               tasaBcvUsd={tasaBcvUsd}
+              onEditOperation={handleEditHistoricalOperation}
+              onDeleteOperation={handleDeleteHistoricalOperation}
             />
           )}
 
@@ -1423,6 +1532,8 @@ export default function App() {
               historicalOperations={historicalOperations}
               clientPayments={clientPayments}
               products={products}
+              onEditClient={handleEditClient}
+              onDeleteClient={handleDeleteClient}
             />
           )}
 
@@ -1436,6 +1547,8 @@ export default function App() {
               onPayProvider={handlePayProvider}
               historicalOperations={historicalOperations}
               providerPayments={providerPayments}
+              onEditProvider={handleEditProvider}
+              onDeleteProvider={handleDeleteProvider}
             />
           )}
 

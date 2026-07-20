@@ -15,9 +15,12 @@ import {
   History,
   CheckCircle,
   ShoppingBag,
-  FileText
+  FileText,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { Provider, Product, HistoricalOperation, ProviderPayment } from '../types';
+import PinConfirmModal from './PinConfirmModal';
 
 interface ProveedoresViewProps {
   providers: Provider[];
@@ -33,7 +36,8 @@ interface ProveedoresViewProps {
     totalCostUsd: number, 
     applyPaymentNow: boolean,
     paymentMethod?: string,
-    reference?: string
+    reference?: string,
+    invoiceNum?: string
   ) => void;
   onPayProvider: (
     providerId: string, 
@@ -43,6 +47,8 @@ interface ProveedoresViewProps {
     customDate?: string, 
     productName?: string
   ) => void;
+  onEditProvider?: (id: string, updatedFields: Partial<Provider>) => void;
+  onDeleteProvider?: (id: string) => void;
 }
 
 export default function ProveedoresView({
@@ -54,7 +60,86 @@ export default function ProveedoresView({
   onAddProvider,
   onRegisterPurchase,
   onPayProvider,
+  onEditProvider,
+  onDeleteProvider
 }: ProveedoresViewProps) {
+  // States for Editing a Provider
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editProductsBought, setEditProductsBought] = useState<string[]>([]);
+  const [editPaymentDueDate, setEditPaymentDueDate] = useState('');
+
+  // States for Pin confirmation modal
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalTitle, setPinModalTitle] = useState('');
+  const [pinModalMessage, setPinModalMessage] = useState('');
+  const [pendingAction, setPendingAction] = useState<{ type: 'edit' | 'delete', targetId: string, payload?: any } | null>(null);
+
+  const handleStartEdit = (provider: Provider) => {
+    setEditingProvider(provider);
+    setEditName(provider.name);
+    setEditPhone(provider.phone);
+    setEditProductsBought(provider.productsBought || []);
+    setEditPaymentDueDate(provider.paymentDueDate || '');
+  };
+
+  const handleToggleProduct = (productName: string) => {
+    setEditProductsBought(prev => {
+      if (prev.includes(productName)) {
+        return prev.filter(p => p !== productName);
+      } else {
+        return [...prev, productName];
+      }
+    });
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProvider || !onEditProvider) return;
+    
+    setPendingAction({
+      type: 'edit',
+      targetId: editingProvider.id,
+      payload: {
+        name: editName.trim(),
+        phone: editPhone.trim(),
+        productsBought: editProductsBought,
+        paymentDueDate: editPaymentDueDate
+      }
+    });
+    setPinModalTitle('Confirmar Modificación');
+    setPinModalMessage(`¿Está seguro de que desea guardar los cambios para el proveedor "${editingProvider.name}"? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartDelete = (provider: Provider) => {
+    if (!onDeleteProvider) return;
+    setPendingAction({
+      type: 'delete',
+      targetId: provider.id
+    });
+    setPinModalTitle('Confirmar Eliminación');
+    setPinModalMessage(`¿Está seguro de que desea eliminar el proveedor "${provider.name}" de la base de datos por completo? Esta acción es irreversible y requiere PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleExecutePendingAction = () => {
+    if (!pendingAction) return;
+    
+    if (pendingAction.type === 'edit' && onEditProvider) {
+      onEditProvider(pendingAction.targetId, pendingAction.payload);
+      setEditingProvider(null);
+      alert('Proveedor modificado con éxito.');
+    } else if (pendingAction.type === 'delete' && onDeleteProvider) {
+      onDeleteProvider(pendingAction.targetId);
+      alert('Proveedor eliminado con éxito.');
+    }
+    
+    setPinModalOpen(false);
+    setPendingAction(null);
+  };
+
   // Estados para añadir Proveedor
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState('');
@@ -69,6 +154,7 @@ export default function ProveedoresView({
   const [newPurchaseProductName, setNewPurchaseProductName] = useState('');
   const [purchaseKg, setPurchaseKg] = useState('');
   const [purchasePrice, setPurchasePrice] = useState('');
+  const [purchaseInvoiceNum, setPurchaseInvoiceNum] = useState('');
   const [payImmediately, setPayImmediately] = useState(false);
   
   // New transaction fields for purchase
@@ -152,7 +238,8 @@ export default function ProveedoresView({
       priceNum, 
       payImmediately,
       payImmediately ? purchaseMethod : undefined,
-      payImmediately ? purchaseReference : undefined
+      payImmediately ? purchaseReference : undefined,
+      purchaseInvoiceNum.trim() || undefined
     );
 
     setSelectedProviderForPurchase(null);
@@ -163,6 +250,7 @@ export default function ProveedoresView({
     setPayImmediately(false);
     setPurchaseMethod('Efectivo');
     setPurchaseReference('');
+    setPurchaseInvoiceNum('');
 
     alert('Compra y mercancía despachadas en inventario con éxito.');
   };
@@ -335,8 +423,30 @@ export default function ProveedoresView({
               
               {/* Header card info */}
               <div className="flex justify-between items-start gap-2">
-                <div>
-                  <h3 className="font-extrabold text-sm text-slate-800 font-sans leading-snug">{p.name}</h3>
+                <div className="flex-1">
+                  <h3 className="font-extrabold text-sm text-slate-800 font-sans leading-snug flex items-center gap-2">
+                    {p.name}
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {onEditProvider && (
+                        <button
+                          onClick={() => handleStartEdit(p)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
+                          title="Modificar Proveedor"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {onDeleteProvider && (
+                        <button
+                          onClick={() => handleStartDelete(p)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                          title="Eliminar Proveedor"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </h3>
                   <span className="text-[10px] text-slate-400 font-bold block mt-0.5">Telf: {p.phone}</span>
                 </div>
                 
@@ -509,6 +619,17 @@ export default function ProveedoresView({
                     />
                   </div>
                 )}
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase">N° de Factura de Compra</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold text-slate-700 outline-hidden" 
+                    value={purchaseInvoiceNum} 
+                    onChange={(e) => setPurchaseInvoiceNum(e.target.value)}
+                    placeholder="Ej. F-39201 (Opcional)" 
+                  />
+                </div>
 
                 <div className="grid grid-cols-2 gap-3.5">
                   <div className="space-y-1">
@@ -882,6 +1003,112 @@ export default function ProveedoresView({
           </div>
         );
       })()}
+
+      {/* MODAL EDITAR PROVEEDOR */}
+      {editingProvider && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <form onSubmit={handleSaveEdit} className="bg-white w-full max-w-sm rounded-2xl overflow-hidden p-6 shadow-2xl relative text-slate-800 flex flex-col max-h-[90vh]">
+            <button 
+              type="button"
+              onClick={() => setEditingProvider(null)} 
+              className="text-slate-400 hover:text-slate-600 absolute right-4 top-4 bg-slate-50 hover:bg-slate-100 p-1 rounded-full cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pb-3 border-b border-slate-100 mb-4 shrink-0">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-indigo-600" />
+                Modificar Proveedor
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto no-scrollbar py-1">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Nombre / Razón Social</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Número de Teléfono</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Plazo / Límite de Pago</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPaymentDueDate}
+                  placeholder="Ej. Sábado Semanal, 15 días"
+                  onChange={(e) => setEditPaymentDueDate(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Rubros que comercializa</label>
+                <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto p-1 border border-slate-100 rounded-xl bg-slate-50/50">
+                  {products.map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => handleToggleProduct(p.name)}
+                      className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase border transition-colors cursor-pointer ${
+                        editProductsBought.includes(p.name)
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-650 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setEditingProvider(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* PORTAL DE PIN DE SEGURIDAD */}
+      <PinConfirmModal
+        isOpen={pinModalOpen}
+        title={pinModalTitle}
+        message={pinModalMessage}
+        onConfirm={handleExecutePendingAction}
+        onCancel={() => {
+          setPinModalOpen(false);
+          setPendingAction(null);
+        }}
+      />
 
     </div>
   );

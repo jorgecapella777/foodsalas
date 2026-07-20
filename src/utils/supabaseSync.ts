@@ -335,8 +335,15 @@ export async function processPendingSyncQueue(): Promise<boolean> {
         const { error } = await supabase.from(item.table).upsert(dbRecord);
         if (error) throw error;
       } else if (item.action === 'delete') {
-        const { error } = await supabase.from(item.table).delete().eq('id', item.payload.id);
+        const idToDelete = item.payload?.id || (typeof item.payload === 'string' ? item.payload : null);
+        if (!idToDelete) {
+          console.error(`No se pudo extraer el ID para eliminar en la tabla ${item.table}`, item.payload);
+          throw new Error(`ID no válido para eliminación`);
+        }
+        console.log(`Ejecutando DELETE en Supabase: tabla=${item.table}, id=${idToDelete}`);
+        const { error } = await supabase.from(item.table).delete().eq('id', idToDelete);
         if (error) throw error;
+        console.log(`DELETE completado con éxito en Supabase para id=${idToDelete}`);
       }
     } catch (e) {
       console.error(`Fallo al sincronizar acción en tabla ${item.table}:`, e);
@@ -346,6 +353,73 @@ export async function processPendingSyncQueue(): Promise<boolean> {
 
   savePendingQueue(remaining);
   return remaining.length === 0;
+}
+
+// Helper para fusionar el estado local con la base de datos de Supabase de manera offline-safe y coordinada
+export function mergeLocalAndRemote<T extends { id: string }>(
+  localList: T[],
+  remoteList: T[],
+  dbTable: string,
+  pendingQueue: PendingAction[]
+): T[] {
+  const pendingUpserts = pendingQueue.filter(item => item.table === dbTable && item.action === 'upsert');
+  const pendingDeletes = pendingQueue.filter(item => item.table === dbTable && item.action === 'delete');
+
+  const pendingUpsertIds = new Set(pendingUpserts.map(item => item.payload?.id).filter(Boolean));
+  const pendingDeleteIds = new Set(
+    pendingDeletes.map(item => item.payload?.id || (typeof item.payload === 'string' ? item.payload : null)).filter(Boolean)
+  );
+
+  const localMap = new Map<string, T>();
+  localList.forEach(item => localMap.set(item.id, item));
+
+  const pendingUpsertMap = new Map<string, T>();
+  pendingUpserts.forEach(item => {
+    if (item.payload && item.payload.id) {
+      pendingUpsertMap.set(item.payload.id, item.payload);
+    }
+  });
+
+  const finalMap = new Map<string, T>();
+
+  // 1. Procesar elementos remotos descargados de la nube
+  remoteList.forEach(remoteItem => {
+    const id = remoteItem.id;
+    // Si está pendiente por eliminar localmente, lo omitimos por completo
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+
+    // Si tiene modificaciones pendientes de subida locales, preferimos la versión local
+    if (pendingUpsertIds.has(id)) {
+      const localVer = pendingUpsertMap.get(id) || localMap.get(id);
+      if (localVer) {
+        finalMap.set(id, localVer);
+      } else {
+        finalMap.set(id, remoteItem);
+      }
+    } else {
+      // De lo contrario, tomamos el valor del servidor
+      finalMap.set(id, remoteItem);
+    }
+  });
+
+  // 2. Procesar elementos locales que están pendientes de creación o existen localmente pero aún no están en la nube
+  localList.forEach(localItem => {
+    const id = localItem.id;
+    if (pendingDeleteIds.has(id)) {
+      return;
+    }
+    // Si no está en remoto pero sí localmente, lo conservamos si está marcado para guardarse localmente
+    // o está pendiente de subida, previniendo eliminaciones accidentales si la nube tarda en reflejarlo
+    if (!finalMap.has(id)) {
+      if (pendingUpsertIds.has(id) || localMap.has(id)) {
+        finalMap.set(id, localItem);
+      }
+    }
+  });
+
+  return Array.from(finalMap.values());
 }
 
 // -----------------------------------------------------------------------------
@@ -368,6 +442,8 @@ export async function syncWithSupabase(localState: FullAppState): Promise<FullAp
     console.warn('Supabase no está configurado. Operando puramente en modo local (sin conexión).');
     return localState;
   }
+
+  const pendingQueue = getPendingQueue();
 
   // 1. Procesar cualquier acción que se haya guardado offline antes de hacer el Pull
   if (isOnline()) {
@@ -398,10 +474,13 @@ export async function syncWithSupabase(localState: FullAppState): Promise<FullAp
       if (error) throw error;
 
       if (data && data.length > 0) {
-        // Si Supabase contiene datos, cargamos y actualizamos la base de datos local
-        const clientRecords = data.map(converters[table.dbTable].toClient);
-        (updatedState as any)[table.key] = clientRecords;
-        saveLocalData(`db_local_${table.key}`, clientRecords);
+        // Si Supabase contiene datos, cargamos y los fusionamos de manera segura con el estado local actual
+        const remoteRecords = data.map(converters[table.dbTable].toClient);
+        const localList = (localState as any)[table.key] || [];
+        const mergedRecords = mergeLocalAndRemote(localList, remoteRecords, table.dbTable, pendingQueue);
+        
+        (updatedState as any)[table.key] = mergedRecords;
+        saveLocalData(`db_local_${table.key}`, mergedRecords);
       } else {
         // Si Supabase está VACÍO, subimos el estado local actual como "semilla" inicial
         console.log(`Sembrando tabla "${table.dbTable}" en Supabase con datos locales...`);

@@ -581,6 +581,75 @@ export function exportOperationsHistoryPDF(
   doc.save(`Historico_Operaciones_${dateRangeLabel.replace(/\s+/g, '_')}.pdf`);
 }
 
+function formatObservationDateTime(dateTimeStr: string): { date: string, time: string } {
+  if (!dateTimeStr) {
+    const now = new Date();
+    return {
+      date: now.toLocaleDateString('es-VE'),
+      time: now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit', hour12: true })
+    };
+  }
+
+  const cleanStr = dateTimeStr.trim();
+  const monthNames: Record<string, string> = {
+    ene: '01', feb: '02', mar: '03', abr: '04', may: '05', jun: '06',
+    jul: '07', ago: '08', sep: '09', oct: '10', nov: '11', dic: '12'
+  };
+
+  const textMatch = cleanStr.match(/(\d{1,2})\s+([a-zA-ZáéíóúÁÉÍÓÚ]{3,})\s+(\d{4})(?:,\s+(\d{1,2}):(\d{2})\s*(?:(a\.?\s*m\.?|p\.?\s*m\.?|AM|PM|am|pm))?)?/i);
+  if (textMatch) {
+    const d = textMatch[1].padStart(2, '0');
+    const mStr = textMatch[2].toLowerCase().substring(0, 3);
+    const m = monthNames[mStr] || '01';
+    const y = textMatch[3];
+    let timeStr = '12:00 m.';
+    
+    if (textMatch[4] && textMatch[5]) {
+      let hh = parseInt(textMatch[4], 10);
+      const mm = textMatch[5];
+      let ampm = textMatch[6] ? textMatch[6].toLowerCase().replace(/\s+/g, '') : '';
+      
+      if (ampm.includes('p')) {
+        ampm = 'p. m.';
+      } else if (ampm.includes('a')) {
+        ampm = 'a. m.';
+      } else {
+        if (hh >= 12) {
+          ampm = 'p. m.';
+          if (hh > 12) hh -= 12;
+        } else {
+          ampm = 'a. m.';
+          if (hh === 0) hh = 12;
+        }
+      }
+      
+      const hhStr = String(hh).padStart(2, '0');
+      timeStr = `${hhStr}:${mm} ${ampm}`;
+    }
+    
+    return { date: `${d}/${m}/${y}`, time: timeStr };
+  }
+
+  const slashMatch = cleanStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,\s+(\d{1,2}):(\d{2}))?/);
+  if (slashMatch) {
+    const d = slashMatch[1].padStart(2, '0');
+    const m = slashMatch[2].padStart(2, '0');
+    const y = slashMatch[3];
+    let timeStr = '12:00 m.';
+    if (slashMatch[4] && slashMatch[5]) {
+      let hh = parseInt(slashMatch[4], 10);
+      const mm = slashMatch[5];
+      const ampm = hh >= 12 ? 'p. m.' : 'a. m.';
+      if (hh > 12) hh -= 12;
+      if (hh === 0) hh = 12;
+      timeStr = `${String(hh).padStart(2, '0')}:${mm} ${ampm}`;
+    }
+    return { date: `${d}/${m}/${y}`, time: timeStr };
+  }
+
+  return { date: cleanStr.split(',')[0], time: cleanStr.split(',')[1] || '12:00 m.' };
+}
+
 /**
  * 5. EXPORTAR FACTURA DE CLIENTE DETALLADA A PDF (ESTILO RECIBO TALONARIO FOTO)
  */
@@ -590,10 +659,22 @@ export function exportClientInvoicePDF(
   selectedMovements: HistoricalOperation[],
   tasaBcvUsd: number,
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  options?: {
+    showRif?: boolean;
+    showPhone?: boolean;
+    showAddress?: boolean;
+    markAsPaid?: boolean;
+    pagoAnticipado?: number;
+  }
 ) {
   const doc = new jsPDF();
   
+  const showRif = options?.showRif ?? true;
+  const showPhone = options?.showPhone ?? true;
+  const showAddress = options?.showAddress ?? true;
+  const markAsPaid = options?.markAsPaid ?? false;
+
   const today = new Date();
   const dayStr = String(today.getDate()).padStart(2, '0');
   const monthStr = String(today.getMonth() + 1).padStart(2, '0');
@@ -613,23 +694,23 @@ export function exportClientInvoicePDF(
   // Separador de cabecera
   doc.line(15, 28, 195, 28);
 
-  // Bloque izquierdo de la cabecera: Nombre comercial, teléfono y dirección (reemplaza Sello y RIF)
-  doc.setFontSize(10.5);
+  // Bloque izquierdo de la cabecera: Nombre comercial, RIF, teléfono centrados y más grandes
+  doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
-  doc.text('INVERSIONES FOOD SALAS F.P.', 18, 34);
+  doc.text('Inversiones Food Salas F.P.', 75, 35, { align: 'center' });
   
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.text('Teléfono: +58 412-1563887', 18, 41);
-  doc.text('Dirección: Yaracuy, Venezuela', 18, 48);
+  doc.setFontSize(10.5);
+  doc.text('V-19455664-7', 75, 42, { align: 'center' });
+  doc.text('0412-1563887', 75, 49, { align: 'center' });
 
   // Línea divisora vertical entre datos del negocio y fecha/N°
   doc.line(135, 28, 135, 55);
 
   // Bloque derecho de la cabecera: Tabla de fecha DIA | MES | AÑO
   doc.line(135, 37, 195, 37); // línea horizontal interna
-  doc.line(155, 28, 155, 37); // separador de DIA
-  doc.line(175, 28, 175, 37); // separador de MES
+  doc.line(155, 28, 155, 47); // separador de DIA (extendido para abarcar valores)
+  doc.line(175, 28, 175, 47); // separador de MES (extendido para abarcar valores)
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
@@ -656,7 +737,6 @@ export function exportClientInvoicePDF(
   doc.line(15, 55, 195, 55);
 
   // Datos del Cliente
-  // "Señor/es:" cambiado por "Nombre/Razon Social:"
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.text('Nombre/Razon Social:', 18, 61);
@@ -673,7 +753,11 @@ export function exportClientInvoicePDF(
   const clientAddr = client.address || 'N/A';
   const clientRif = client.rif || 'N/A';
   const clientPhone = client.phone || 'N/A';
-  doc.text(clientAddr, 35, 71);
+  if (showAddress) {
+    doc.text(clientAddr, 35, 71);
+  } else {
+    doc.text('------------------------------------------------------------', 35, 71);
+  }
 
   // Separador horizontal para Cédula y Teléfono en dos cuadros abajo
   doc.line(15, 75, 195, 75);
@@ -687,7 +771,11 @@ export function exportClientInvoicePDF(
   doc.text('Cédula / RIF:', 18, 80);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text(clientRif, 40, 80);
+  if (showRif) {
+    doc.text(clientRif, 40, 80);
+  } else {
+    doc.text('-----------------', 40, 80);
+  }
 
   // Cuadro 2: Teléfono
   doc.setFont('helvetica', 'bold');
@@ -695,31 +783,37 @@ export function exportClientInvoicePDF(
   doc.text('Teléfono:', 108, 80);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text(clientPhone, 126, 80);
+  if (showPhone) {
+    doc.text(clientPhone, 126, 80);
+  } else {
+    doc.text('-----------------', 126, 80);
+  }
 
   // Separador horizontal antes de la tabla
   doc.line(15, 83, 195, 83);
 
-  // Tabla estilo talonario: CANT. | DESCRIPCION | IMPORTE Bs.
+  // Tabla estilo talonario con columna P. Unitario: CANT. | DESCRIPCION | P. UNIT. | IMPORTE USD
   doc.line(15, 90, 195, 90); // Separador de títulos
 
-  // Columnas de la tabla (Líneas verticales continuas)
+  // Columnas de la tabla (Líneas verticales continuas del grid)
   doc.line(35, 83, 35, 190);
+  doc.line(130, 83, 130, 190);
   doc.line(155, 83, 155, 190);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.text('CANT.', 25, 88, { align: 'center' });
-  doc.text('DESCRIPCION', 95, 88, { align: 'center' });
-  doc.text('IMPORTE Bs.', 175, 88, { align: 'center' });
+  doc.text('DESCRIPCION', 82.5, 88, { align: 'center' });
+  doc.text('P. UNIT.', 142.5, 88, { align: 'center' });
+  doc.text('IMPORTE USD', 175, 88, { align: 'center' });
 
   // Llenar filas de la tabla de abonos/despachos seleccionados
-  let rowY = 96;
+  let rowY = 100; // Filas perfectas de 10mm de altura que finalizan exactamente en 190
   let totalKg = 0;
   let totalUsd = 0;
 
   selectedMovements.forEach((op) => {
-    if (rowY >= 188) return; // Límite físico del talonario de una página
+    if (rowY >= 190) return; // Límite físico del talonario de una página
 
     const kg = op.kg || 0;
     const total = op.amountUsd || 0;
@@ -737,22 +831,20 @@ export function exportClientInvoicePDF(
       cleanDesc = cleanDesc.split(' a ')[0].trim();
     }
 
-    const fullDesc = `${cleanDesc} ($${priceUnit.toFixed(2)}/KG - Total: $${total.toFixed(2)} USD)`;
-    const totalBs = total * tasaBcvUsd;
-
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
 
     // Escribir fila
-    doc.text(`${kg.toFixed(2)} KG`, 25, rowY - 2, { align: 'center' });
-    doc.text(fullDesc, 38, rowY - 2);
-    doc.text(`${totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs.`, 175, rowY - 2, { align: 'center' });
+    doc.text(`${kg.toFixed(2)} KG`, 25, rowY - 3.5, { align: 'center' });
+    doc.text(cleanDesc, 38, rowY - 3.5);
+    doc.text(`$ ${priceUnit.toFixed(2)}`, 142.5, rowY - 3.5, { align: 'center' });
+    doc.text(`$ ${total.toFixed(2)}`, 175, rowY - 3.5, { align: 'center' });
 
     // Dibujar línea sutil de renglón
     doc.setDrawColor(180, 180, 180);
     doc.setLineWidth(0.2);
     doc.line(15, rowY, 195, rowY);
-    rowY += 7;
+    rowY += 10;
   });
 
   // Dibujar renglones vacíos simulados para estilo de papel preimpreso
@@ -760,7 +852,7 @@ export function exportClientInvoicePDF(
     doc.setDrawColor(210, 210, 210);
     doc.setLineWidth(0.15);
     doc.line(15, rowY, 195, rowY);
-    rowY += 7;
+    rowY += 10;
   }
 
   // Restaurar estilos de línea negra gruesa
@@ -770,32 +862,91 @@ export function exportClientInvoicePDF(
   // Línea inferior de la tabla
   doc.line(15, 190, 195, 190);
 
+  // Sello de "PAGADO" si aplica (Coordinado perfectamente en inclinación de -12 grados con efecto de tinta húmeda)
+  if (markAsPaid) {
+    const drawRotatedRect = (cx: number, cy: number, w: number, h: number, angleDegrees: number) => {
+      const angleRad = (angleDegrees * Math.PI) / 180;
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
+      const corners = [
+        [-w/2, -h/2],
+        [w/2, -h/2],
+        [w/2, h/2],
+        [-w/2, h/2]
+      ];
+      const rotated = corners.map(([x, y]) => {
+        return [
+          cx + (x * cos - y * sin),
+          cy + (x * sin + y * cos)
+        ];
+      });
+      for (let i = 0; i < 4; i++) {
+        const p1 = rotated[i];
+        const p2 = rotated[(i + 1) % 4];
+        doc.line(p1[0], p1[1], p2[0], p2[1]);
+      }
+    };
+
+    doc.saveGraphicsState?.();
+    try {
+      const gState = new (doc as any).GState({ opacity: 0.82, "stroke-opacity": 0.82 });
+      doc.setGState(gState);
+    } catch (e) {}
+
+    doc.setDrawColor(220, 38, 38); // red-600
+    doc.setTextColor(220, 38, 38);
+
+    const stampCx = 145;
+    const stampCy = 143;
+    const stampAngle = -12; // Inclinación de -12 grados
+
+    // 1. Recuadro exterior grueso del sello
+    doc.setLineWidth(1.2);
+    drawRotatedRect(stampCx, stampCy, 46, 18, stampAngle);
+
+    // 2. Recuadro interior delgado
+    doc.setLineWidth(0.4);
+    drawRotatedRect(stampCx, stampCy, 42, 14, stampAngle);
+
+    // 3. Texto "PAGADO" rotado y centrado (Usa -stampAngle que es 12 para coordinar de forma paralela con el recuadro)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text('PAGADO', stampCx, stampCy + 1.5, { 
+      angle: -stampAngle,
+      align: 'center'
+    });
+
+    // 4. Salpicaduras de tinta húmeda
+    doc.setFillColor(220, 38, 38);
+    const cosVal = Math.cos((stampAngle * Math.PI) / 180);
+    const sinVal = Math.sin((stampAngle * Math.PI) / 180);
+    
+    const splatters = [
+      [-21, -7, 0.35], [20, 6, 0.4], [-15, 8, 0.2], [18, -8, 0.35], 
+      [-5, -9, 0.25], [10, 7, 0.3], [-23, 2, 0.45], [22, -3, 0.2],
+      [-10, 6, 0.2], [5, -7, 0.3], [12, -5, 0.25], [-18, -5, 0.35]
+    ];
+
+    splatters.forEach(([rx, ry, radius]) => {
+      const px = stampCx + (rx * cosVal - ry * sinVal);
+      const py = stampCy + (rx * sinVal + ry * cosVal);
+      const bleedX = (Math.random() - 0.5) * 0.3;
+      const bleedY = (Math.random() - 0.5) * 0.3;
+      doc.circle(px + bleedX, py + bleedY, radius, 'F');
+    });
+
+    doc.restoreGraphicsState?.();
+  }
+
   // Bloque inferior de observaciones (izquierda) y totales (derecha)
   doc.line(115, 190, 115, 235); // Separador vertical central
 
-  // Observaciones
+  // Observaciones estáticas solicitadas por el cliente
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.text('Observ.', 18, 196);
   
-  // Construir texto corrido de observaciones descriptivas sobre las compras
-  const obsParts: string[] = [];
-  selectedMovements.forEach(op => {
-    const isCredito = op.description.toUpperCase().includes('CREDITO') || op.description.toUpperCase().includes('CRÉDITO');
-    const cond = isCredito ? 'A CRÉDITO' : 'DE CONTADO';
-    
-    let cleanDesc = op.description;
-    if (op.description.includes(':')) {
-      cleanDesc = op.description.split(':').slice(1).join(':').trim();
-    }
-    if (cleanDesc.includes(' a ')) {
-      cleanDesc = cleanDesc.split(' a ')[0].trim();
-    }
-    
-    const kg = op.kg || 0;
-    obsParts.push(`El cliente compró ${kg.toFixed(2)} KG de ${cleanDesc} el día ${op.dateTime} cotizado a la tasa de Bs. ${tasaBcvUsd.toFixed(2)} por dólar bajo la condición ${cond}.`);
-  });
-  const obsText = obsParts.join(' ');
+  const obsText = "La tasa BCV aplicable será la del día en curso siempre que el pago se reporte antes de las 4:00 p. m. Pasada esta hora o en días no laborables (como fines de semana o feriados), se tomará como referencia la tasa oficial del siguiente día hábil bancario.";
   const splitObs = doc.splitTextToSize(obsText, 93);
 
   doc.setFont('helvetica', 'italic');
@@ -803,33 +954,43 @@ export function exportClientInvoicePDF(
   doc.setTextColor(50, 50, 50);
   doc.text(splitObs, 18, 202);
 
-  // Sección de Totales (Subtotal, Total USD, Tasa BCV REF y Total Bs.D)
+  // Determinar ESTADO de la factura (A CRÉDITO o DE CONTADO)
+  const hasCredito = selectedMovements.some(op => op.description.toUpperCase().includes('CREDITO') || op.description.toUpperCase().includes('CRÉDITO'));
+  const estado = hasCredito ? 'A CRÉDITO' : 'DE CONTADO';
+
+  // Determinar Pago Anticipado (si aplica)
+  const pagoAnticipado = options?.pagoAnticipado !== undefined 
+    ? options.pagoAnticipado 
+    : (client.balanceUsd < 0 ? Math.abs(client.balanceUsd) : 0);
+
+  // Sección de Totales (Únicamente en Dólares USD, libre de Bolívares)
   doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('SUBTOTAL:', 118, 198);
+  doc.setFontSize(8.5);
+  doc.text('SUBTOTAL:', 118, 196);
   doc.setFont('helvetica', 'normal');
-  doc.text(`$ ${totalUsd.toFixed(2)} USD`, 192, 198, { align: 'right' });
+  doc.text(`$ ${totalUsd.toFixed(2)} USD`, 192, 196, { align: 'right' });
 
   doc.setFont('helvetica', 'bold');
-  doc.text('TOTAL Bs.D HOY:', 118, 206);
+  doc.text('ESTADO:', 118, 202);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Bs. ${(totalUsd * tasaBcvUsd).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`, 192, 206, { align: 'right' });
+  doc.text(estado, 192, 202, { align: 'right' });
 
   doc.setFont('helvetica', 'bold');
-  doc.text('TASA BCV REF:', 118, 214);
+  doc.text('PAGO ANTICIPADO:', 118, 208);
   doc.setFont('helvetica', 'normal');
-  doc.text(`Bs. ${tasaBcvUsd.toFixed(2)}`, 192, 214, { align: 'right' });
+  doc.text(`$ ${pagoAnticipado.toFixed(2)} USD`, 192, 208, { align: 'right' });
 
-  // Recuadro sombreado para el Total Final en Dólares (TOTAL USD)
+  // Recuadro sombreado para el Total Final en Dólares (TOTAL USD = SUBTOTAL - PAGO ANTICIPADO)
   doc.setFillColor(245, 245, 245);
-  doc.rect(115, 222, 80, 13, 'F');
-  doc.rect(115, 222, 80, 13, 'D');
+  doc.rect(115, 214, 80, 16, 'F');
+  doc.rect(115, 214, 80, 16, 'D');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('TOTAL USD:', 118, 230);
-  doc.text(`$ ${totalUsd.toFixed(2)} USD`, 192, 230, { align: 'right' });
+  doc.setFontSize(10);
+  doc.text('TOTAL USD:', 118, 224);
+  const finalTotalUsd = totalUsd - pagoAnticipado;
+  doc.text(`$ ${finalTotalUsd.toFixed(2)} USD`, 192, 224, { align: 'right' });
 
   // Borde contenedor inferior de firmas
   doc.rect(15, 190, 180, 45, 'D');

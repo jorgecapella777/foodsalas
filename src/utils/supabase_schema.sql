@@ -148,3 +148,17 @@ ALTER TABLE provider_payments DISABLE ROW LEVEL SECURITY;
 -- MIGRACIÓN / ACTUALIZACIÓN: Ejecute esto si ya tiene las tablas creadas para agregar los nuevos campos
 ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_kg_usd NUMERIC(12, 2) DEFAULT 0.00;
 
+-- 10. Tabla de Configuración de la App (para PIN de seguridad, etc.)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE app_settings DISABLE ROW LEVEL SECURITY;
+
+-- Insertar PIN de seguridad por defecto si no existe
+INSERT INTO app_settings (key, value) 
+VALUES ('security_pin', '151224')
+ON CONFLICT (key) DO NOTHING;
+

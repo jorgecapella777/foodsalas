@@ -43,6 +43,19 @@ export default function TasasView({
   const [editEur, setEditEur] = useState(tasaBcvEur.toString());
   const [editUsdt, setEditUsdt] = useState(tasaUsdt.toString());
 
+  // Sincronizar campos de edición cuando cambian las tasas del padre
+  useEffect(() => {
+    setEditUsd(tasaBcvUsd.toString());
+  }, [tasaBcvUsd]);
+
+  useEffect(() => {
+    setEditEur(tasaBcvEur.toString());
+  }, [tasaBcvEur]);
+
+  useEffect(() => {
+    setEditUsdt(tasaUsdt.toString());
+  }, [tasaUsdt]);
+
   // Function to pull real-time rates from back-end scrapers
   const fetchLiveRates = async (showNotification = false) => {
     setIsSyncing(true);

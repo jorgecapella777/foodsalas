@@ -12,14 +12,19 @@ import {
   Calendar,
   Layers,
   FileText,
-  X
+  X,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { HistoricalOperation } from '../types';
 import { exportTransactionPDF, exportOperationsHistoryPDF } from '../utils/pdfGenerator';
+import PinConfirmModal from './PinConfirmModal';
 
 interface HistoricosViewProps {
   operations: HistoricalOperation[];
   tasaBcvUsd: number;
+  onEditOperation?: (id: string, updatedFields: Partial<HistoricalOperation>) => void;
+  onDeleteOperation?: (id: string) => void;
 }
 
 type FilterType = 'TODOS' | 'CLIENTES' | 'PROVEEDORES' | 'INVENTARIO_ENTRADAS' | 'INVENTARIO_SALIDAS';
@@ -102,7 +107,12 @@ function filterByRange(ops: HistoricalOperation[], range: string, customStart: s
   });
 }
 
-export default function HistoricosView({ operations, tasaBcvUsd }: HistoricosViewProps) {
+export default function HistoricosView({ 
+  operations, 
+  tasaBcvUsd,
+  onEditOperation,
+  onDeleteOperation
+}: HistoricosViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('TODOS');
   
@@ -112,6 +122,81 @@ export default function HistoricosView({ operations, tasaBcvUsd }: HistoricosVie
   const [exportRange, setExportRange] = useState<string>('Hoy');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
+
+  // Edit states
+  const [editingOp, setEditingOp] = useState<HistoricalOperation | null>(null);
+  const [editDescription, setEditDescription] = useState('');
+  const [editAmountUsd, setEditAmountUsd] = useState('');
+  const [editOrigin, setEditOrigin] = useState('');
+  const [editDestination, setEditDestination] = useState('');
+  const [editReference, setEditReference] = useState('');
+
+  // Security pin states
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalTitle, setPinModalTitle] = useState('');
+  const [pinModalMessage, setPinModalMessage] = useState('');
+  const [pendingAction, setPendingAction] = useState<{
+    type: 'edit' | 'delete';
+    targetId: string;
+    payload?: any;
+  } | null>(null);
+
+  const handleStartEdit = (op: HistoricalOperation) => {
+    setEditingOp(op);
+    setEditDescription(op.description);
+    setEditAmountUsd(op.amountUsd ? op.amountUsd.toString() : '');
+    setEditOrigin(op.origin || '');
+    setEditDestination(op.destination || '');
+    setEditReference(op.reference || '');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOp || !onEditOperation) return;
+    setPendingAction({
+      type: 'edit',
+      targetId: editingOp.id,
+      payload: {
+        description: editDescription.trim(),
+        amountUsd: editAmountUsd ? parseFloat(editAmountUsd) : undefined,
+        origin: editOrigin.trim() || undefined,
+        destination: editDestination.trim() || undefined,
+        reference: editReference.trim() || undefined
+      }
+    });
+    setPinModalTitle('Confirmar Modificación');
+    setPinModalMessage(`¿Está seguro de que desea guardar los cambios de esta operación? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartDelete = (op: HistoricalOperation) => {
+    if (!onDeleteOperation) return;
+    setPendingAction({
+      type: 'delete',
+      targetId: op.id
+    });
+    setPinModalTitle('Confirmar Eliminación');
+    setPinModalMessage(`¿Está seguro de que desea eliminar permanentemente esta operación del historial? Esta acción es irreversible y requiere PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleExecutePendingAction = () => {
+    if (!pendingAction) return;
+
+    if (pendingAction.type === 'edit' && onEditOperation) {
+      onEditOperation(pendingAction.targetId, pendingAction.payload);
+      setEditingOp(null);
+      setSelectedOp(null);
+      alert('Operación modificada con éxito.');
+    } else if (pendingAction.type === 'delete' && onDeleteOperation) {
+      onDeleteOperation(pendingAction.targetId);
+      setSelectedOp(null);
+      alert('Operación eliminada con éxito.');
+    }
+
+    setPinModalOpen(false);
+    setPendingAction(null);
+  };
 
   // Filter logic
   const filteredOperations = operations.filter(op => {
@@ -409,22 +494,46 @@ export default function HistoricosView({ operations, tasaBcvUsd }: HistoricosVie
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
-              <button 
-                type="button" 
-                onClick={() => exportTransactionPDF(selectedOp, tasaBcvUsd)}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-2.5 rounded-xl uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-97"
-              >
-                <FileText className="w-4 h-4" />
-                <span>Guardar PDF</span>
-              </button>
-              <button 
-                type="button" 
-                onClick={() => setSelectedOp(null)}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-xs py-2.5 rounded-xl uppercase tracking-wider cursor-pointer"
-              >
-                Cerrar
-              </button>
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex flex-col gap-2">
+              <div className="flex gap-2">
+                {onEditOperation && (
+                  <button 
+                    type="button" 
+                    onClick={() => handleStartEdit(selectedOp)}
+                    className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-[11px] py-2.5 rounded-xl uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Modificar</span>
+                  </button>
+                )}
+                {onDeleteOperation && (
+                  <button 
+                    type="button" 
+                    onClick={() => handleStartDelete(selectedOp)}
+                    className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-[11px] py-2.5 rounded-xl uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Eliminar</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => exportTransactionPDF(selectedOp, tasaBcvUsd)}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-2.5 rounded-xl uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-transform active:scale-97"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>Guardar PDF</span>
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => setSelectedOp(null)}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-xs py-2.5 rounded-xl uppercase tracking-wider cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -530,6 +639,109 @@ export default function HistoricosView({ operations, tasaBcvUsd }: HistoricosVie
           </div>
         </div>
       )}
+
+      {/* MODAL EDITAR OPERACIÓN */}
+      {editingOp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <form onSubmit={handleSaveEdit} className="bg-white w-full max-w-sm rounded-2xl overflow-hidden p-6 shadow-2xl relative text-slate-800 flex flex-col max-h-[90vh]">
+            <button 
+              type="button"
+              onClick={() => setEditingOp(null)} 
+              className="text-slate-400 hover:text-slate-600 absolute right-4 top-4 bg-slate-50 hover:bg-slate-100 p-1 rounded-full cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pb-3 border-b border-slate-100 mb-4 shrink-0">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-indigo-600" />
+                Modificar Operación Histórica
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto no-scrollbar py-1">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Descripción / Nota</label>
+                <textarea 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold h-20 resize-none" 
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Monto ($ USD)</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editAmountUsd}
+                  onChange={(e) => setEditAmountUsd(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Origen</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editOrigin}
+                  onChange={(e) => setEditOrigin(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Destino</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editDestination}
+                  onChange={(e) => setEditDestination(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Referencia</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editReference}
+                  onChange={(e) => setEditReference(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setEditingOp(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* PORTAL DE PIN DE SEGURIDAD */}
+      <PinConfirmModal
+        isOpen={pinModalOpen}
+        title={pinModalTitle}
+        message={pinModalMessage}
+        onConfirm={handleExecutePendingAction}
+        onCancel={() => {
+          setPinModalOpen(false);
+          setPendingAction(null);
+        }}
+      />
 
     </div>
   );

@@ -77,6 +77,30 @@ export default function FacturarView({
   
   // States
   const [clientId, setClientId] = useState('');
+
+  // Calcular deudas en kilos
+  const getClientOwedKg = (client: any) => {
+    if (client.balanceUsd <= 0) return 0;
+    const clientSales = (historicalOperations || []).filter(op => {
+      const nameMatch = op.destination?.toLowerCase() === client.name.toLowerCase() || 
+                        op.origin?.toLowerCase() === client.name.toLowerCase() || 
+                        op.description.toLowerCase().includes(client.name.toLowerCase());
+      const isSale = op.description.toLowerCase().includes('venta') && op.kg !== undefined && op.kg > 0;
+      return nameMatch && isSale;
+    });
+
+    if (clientSales.length === 0) {
+      return client.balanceUsd / 6.0; // Precio referencial por kg
+    }
+
+    const totalSalesUsd = clientSales.reduce((sum, op) => sum + (op.amountUsd || 0), 0);
+    const totalSalesKg = clientSales.reduce((sum, op) => sum + (op.kg || 0), 0);
+
+    if (totalSalesUsd > 0 && totalSalesKg > 0) {
+      return client.balanceUsd / (totalSalesUsd / totalSalesKg);
+    }
+    return 0;
+  };
   const [dateFrom, setDateFrom] = useState(() => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -88,6 +112,27 @@ export default function FacturarView({
   const [invoiceNum, setInvoiceNum] = useState('');
   const [selectedOpIds, setSelectedOpIds] = useState<Record<string, boolean>>({});
 
+  // PDF settings
+  const [showRif, setShowRif] = useState(true);
+  const [showPhone, setShowPhone] = useState(true);
+  const [showAddress, setShowAddress] = useState(true);
+  const [markAsPaid, setMarkAsPaid] = useState(false);
+  const [pagoAnticipado, setPagoAnticipado] = useState(0);
+
+  const selectedClient = useMemo(() => {
+    return clients.find(c => c.id === clientId) || null;
+  }, [clients, clientId]);
+
+  // Auto-set default prepayment if selected client has credit/balance in favor (balanceUsd < 0)
+  useEffect(() => {
+    if (selectedClient) {
+      const defaultAnticipado = selectedClient.balanceUsd < 0 ? Math.abs(selectedClient.balanceUsd) : 0;
+      setPagoAnticipado(defaultAnticipado);
+    } else {
+      setPagoAnticipado(0);
+    }
+  }, [selectedClient]);
+
   // Auto-generate pure numeric invoice number when client is changed
   useEffect(() => {
     if (clientId) {
@@ -95,10 +140,6 @@ export default function FacturarView({
       setInvoiceNum(randomNum.toString());
     }
   }, [clientId]);
-
-  const selectedClient = useMemo(() => {
-    return clients.find(c => c.id === clientId) || null;
-  }, [clients, clientId]);
 
   // Filter movements for selected client and date range
   const clientMovements = useMemo(() => {
@@ -200,7 +241,14 @@ export default function FacturarView({
       movementsToBill,
       tasaBcvUsd,
       dateFrom,
-      dateTo
+      dateTo,
+      {
+        showRif,
+        showPhone,
+        showAddress,
+        markAsPaid,
+        pagoAnticipado
+      }
     );
     
     alert('Factura PDF generada y descargada de manera exitosa.');
@@ -255,7 +303,7 @@ export default function FacturarView({
                 <option value="">Seleccione un cliente para facturar...</option>
                 {clients.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.name} {c.rif ? `[RIF ${c.rif}]` : ''} {c.balanceUsd > 0 ? `(Debe: $${c.balanceUsd.toFixed(2)})` : '(Solvente)'}
+                    {c.name} {c.rif ? `[RIF ${c.rif}]` : ''} {c.balanceUsd > 0 ? `(Debe: $${c.balanceUsd.toFixed(2)} - ${getClientOwedKg(c).toFixed(1)} Kg aprox.)` : '(Solvente)'}
                   </option>
                 ))}
               </select>
@@ -285,6 +333,82 @@ export default function FacturarView({
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
               />
+            </div>
+          </div>
+
+          {/* Opciones de Impresión / Talonario */}
+          <div className="pt-3 border-t border-slate-100 space-y-3">
+            <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider">
+              Opciones de Talonario (Mostrar en PDF)
+            </label>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-150">
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={showRif}
+                  onChange={(e) => setShowRif(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                />
+                <span>Mostrar Cédula/RIF</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={showPhone}
+                  onChange={(e) => setShowPhone(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                />
+                <span>Mostrar Teléfono</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={showAddress}
+                  onChange={(e) => setShowAddress(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                />
+                <span>Mostrar Dirección</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-black text-emerald-700">
+                <input
+                  type="checkbox"
+                  checked={markAsPaid}
+                  onChange={(e) => setMarkAsPaid(e.target.checked)}
+                  className="w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500 cursor-pointer"
+                />
+                <span className="flex items-center gap-1">Sello "PAGADO"</span>
+              </label>
+            </div>
+
+            {/* Custom Prepayment/Anticipado Input */}
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-150 max-w-sm space-y-1.5">
+              <label className="block text-[10px] font-bold text-slate-505 uppercase tracking-wide">
+                Monto de Pago Anticipado ($ USD)
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="w-full bg-white border border-slate-205 pl-7 pr-3 py-1.5 rounded-xl text-xs font-black text-slate-750 focus:outline-hidden"
+                  placeholder="0.00"
+                  value={pagoAnticipado || ''}
+                  onChange={(e) => setPagoAnticipado(Math.max(0, parseFloat(e.target.value) || 0))}
+                />
+              </div>
+              <p className="text-[9px] text-slate-400 font-medium">
+                {selectedClient?.balanceUsd && selectedClient.balanceUsd < 0 ? (
+                  <span className="text-emerald-600 font-bold">
+                    * El cliente posee un saldo a favor de ${Math.abs(selectedClient.balanceUsd).toFixed(2)} USD (Cargado automáticamente).
+                  </span>
+                ) : (
+                  "Especifique un anticipo si el cliente realizó un abono previo."
+                )}
+              </p>
             </div>
           </div>
         </div>

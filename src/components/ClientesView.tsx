@@ -17,9 +17,12 @@ import {
   ShoppingBag,
   History,
   Info,
-  FileText
+  FileText,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { Client, HistoricalOperation, ClientPayment } from '../types';
+import PinConfirmModal from './PinConfirmModal';
 
 interface ClientesViewProps {
   clients: Client[];
@@ -45,6 +48,8 @@ interface ClientesViewProps {
     customDate?: string,
     productBoughtName?: string
   ) => void;
+  onEditClient?: (id: string, updatedFields: Partial<Client>) => void;
+  onDeleteClient?: (id: string) => void;
 }
 
 export default function ClientesView({
@@ -55,9 +60,111 @@ export default function ClientesView({
   products,
   onAddClient,
   onRegisterClientCreditAbono,
+  onEditClient,
+  onDeleteClient
 }: ClientesViewProps) {
   // Búsqueda y Filtros
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Calcular kilos correspondientes a la deuda de un cliente
+  const getClientOwedKg = (client: Client) => {
+    if (client.balanceUsd <= 0) return 0;
+
+    // Filtrar operaciones de venta asociadas a este cliente que contengan kilos
+    const clientSales = (historicalOperations || []).filter(op => {
+      const nameMatch = op.destination?.toLowerCase() === client.name.toLowerCase() || 
+                        op.origin?.toLowerCase() === client.name.toLowerCase() || 
+                        op.description.toLowerCase().includes(client.name.toLowerCase());
+      
+      const isSale = op.description.toLowerCase().includes('venta') && op.kg !== undefined && op.kg > 0;
+      return nameMatch && isSale;
+    });
+
+    if (clientSales.length === 0) {
+      // Si no hay ventas registradas en el historial, estimar con base en el precio promedio de los productos disponibles
+      const avgProductPrice = products && products.length > 0
+        ? products.reduce((sum, p) => sum + p.priceUsd, 0) / products.length
+        : 6.0; // Precio de referencia por kg
+      return client.balanceUsd / avgProductPrice;
+    }
+
+    const totalSalesUsd = clientSales.reduce((sum, op) => sum + (op.amountUsd || 0), 0);
+    const totalSalesKg = clientSales.reduce((sum, op) => sum + (op.kg || 0), 0);
+
+    if (totalSalesUsd > 0 && totalSalesKg > 0) {
+      const weightedAvgPrice = totalSalesUsd / totalSalesKg;
+      return client.balanceUsd / weightedAvgPrice;
+    }
+
+    return 0;
+  };
+
+  // States for Editing a Client
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+  const [editRif, setEditRif] = useState('');
+  
+  // States for Pin confirmation modal
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinModalTitle, setPinModalTitle] = useState('');
+  const [pinModalMessage, setPinModalMessage] = useState('');
+  const [pendingAction, setPendingAction] = useState<{ type: 'edit' | 'delete', targetId: string, payload?: any } | null>(null);
+
+  const handleStartEdit = (client: Client) => {
+    setEditingClient(client);
+    setEditName(client.name);
+    setEditPhone(client.phone);
+    setEditAddress(client.address || '');
+    setEditRif(client.rif || '');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingClient || !onEditClient) return;
+    
+    setPendingAction({
+      type: 'edit',
+      targetId: editingClient.id,
+      payload: {
+        name: editName.trim(),
+        phone: editPhone.trim(),
+        address: editAddress.trim(),
+        rif: editRif.trim()
+      }
+    });
+    setPinModalTitle('Confirmar Modificación');
+    setPinModalMessage(`¿Está seguro de que desea guardar los cambios para el cliente "${editingClient.name}"? Se requerirá PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleStartDelete = (client: Client) => {
+    if (!onDeleteClient) return;
+    setPendingAction({
+      type: 'delete',
+      targetId: client.id
+    });
+    setPinModalTitle('Confirmar Eliminación');
+    setPinModalMessage(`¿Está seguro de que desea eliminar el cliente "${client.name}" por completo de la base de datos? Esta acción es irreversible y requiere PIN de seguridad.`);
+    setPinModalOpen(true);
+  };
+
+  const handleExecutePendingAction = () => {
+    if (!pendingAction) return;
+    
+    if (pendingAction.type === 'edit' && onEditClient) {
+      onEditClient(pendingAction.targetId, pendingAction.payload);
+      setEditingClient(null);
+      alert('Cliente modificado con éxito.');
+    } else if (pendingAction.type === 'delete' && onDeleteClient) {
+      onDeleteClient(pendingAction.targetId);
+      alert('Cliente eliminado con éxito.');
+    }
+    
+    setPinModalOpen(false);
+    setPendingAction(null);
+  };
 
   const getProductDebtBreakdown = (client: Client) => {
     // Obtener todos los productos comprados por el cliente
@@ -353,8 +460,30 @@ export default function ClientesView({
               
               {/* Cabecera */}
               <div className="flex justify-between items-start gap-2">
-                <div>
-                  <h4 className="font-extrabold text-sm text-slate-800 font-sans leading-tight">{c.name}</h4>
+                <div className="flex-1">
+                  <h4 className="font-extrabold text-sm text-slate-800 font-sans leading-tight flex items-center gap-2">
+                    {c.name}
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {onEditClient && (
+                        <button
+                          onClick={() => handleStartEdit(c)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer"
+                          title="Modificar Cliente"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {onDeleteClient && (
+                        <button
+                          onClick={() => handleStartDelete(c)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                          title="Eliminar Cliente"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </h4>
                   <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1 text-[10px] text-slate-400 font-bold">
                     <span className="flex items-center gap-0.5"><Phone className="w-3 h-3 text-emerald-600" /> {c.phone}</span>
                     {c.rif && c.rif !== 'N/A' && <span className="font-mono">Cedula/RIF: {c.rif}</span>}
@@ -391,9 +520,14 @@ export default function ClientesView({
                 <div>
                   <span className="text-[9px] text-slate-400 uppercase font-black block mb-0.5">Saldo en Cuenta</span>
                   {hasDeuda && (
-                    <span className="text-sm font-black text-rose-600 font-sans block">
-                      Debiendo: ${c.balanceUsd.toFixed(2)} USD
-                    </span>
+                    <div className="space-y-0.5">
+                      <span className="text-sm font-black text-rose-600 font-sans block">
+                        Debiendo: ${c.balanceUsd.toFixed(2)} USD
+                      </span>
+                      <span className="text-[10.5px] font-bold text-slate-500 block">
+                        ({getClientOwedKg(c).toFixed(2)} Kg aprox.)
+                      </span>
+                    </div>
                   )}
                   {isAFavor && (
                     <span className="text-sm font-black text-emerald-600 font-sans block">
@@ -956,6 +1090,100 @@ export default function ClientesView({
           </div>
         );
       })()}
+
+      {/* MODAL EDITAR CLIENTE */}
+      {editingClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <form onSubmit={handleSaveEdit} className="bg-white w-full max-w-sm rounded-2xl overflow-hidden p-6 shadow-2xl relative text-slate-800 flex flex-col max-h-[90vh]">
+            <button 
+              type="button"
+              onClick={() => setEditingClient(null)} 
+              className="text-slate-400 hover:text-slate-600 absolute right-4 top-4 bg-slate-50 hover:bg-slate-100 p-1 rounded-full cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="pb-3 border-b border-slate-100 mb-4 shrink-0">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Pencil className="w-4 h-4 text-indigo-600" />
+                Modificar Cliente
+              </h3>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto no-scrollbar py-1">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Nombre / Razón Social</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Número Telefónico</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  required 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Cédula / RIF</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editRif}
+                  onChange={(e) => setEditRif(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Dirección de Despacho</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-slate-50 border border-slate-205 p-2.5 rounded-xl text-xs font-bold" 
+                  value={editAddress}
+                  onChange={(e) => setEditAddress(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 mt-4 shrink-0 flex gap-2">
+              <button 
+                type="button"
+                onClick={() => setEditingClient(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="w-1/2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase py-3 rounded-xl cursor-pointer"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* PORTAL DE PIN DE SEGURIDAD */}
+      <PinConfirmModal
+        isOpen={pinModalOpen}
+        title={pinModalTitle}
+        message={pinModalMessage}
+        onConfirm={handleExecutePendingAction}
+        onCancel={() => {
+          setPinModalOpen(false);
+          setPendingAction(null);
+        }}
+      />
 
     </div>
   );
